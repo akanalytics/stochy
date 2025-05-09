@@ -8,7 +8,7 @@ use crate::{
     BoxedError, StochyError,
 };
 
-/// Hyperparameters for the [SPSA](SpsaSolver) algorithm
+/// Hyperparameters for the [SPSA](SpsaAlgo) algorithm
 ///
 /// | Hyperparameter | Default | Explanation |
 /// | :--- | :--- | :--- |
@@ -131,13 +131,13 @@ pub(crate) struct SpsaState {
 ///
 ///
 /// ```rust
-/// use stochy::{SpsaParams, SpsaSolver};
+/// use stochy::{SpsaParams, SpsaAlgo};
 /// use stepwise::{fixed_iters, Driver, assert_approx_eq};
 ///
 /// let f = |x: &[f64]| (x[0] - 1.5).powi(2) + x.iter().skip(1).map(|x| x * x).sum::<f64>();
 ///
 /// let hyperparams = SpsaParams::default();
-/// let algo = SpsaSolver::from_fn(hyperparams, &[1.0, 1.0], f).expect("bad hyperparams!");
+/// let algo = SpsaAlgo::from_fn(hyperparams, vec![1.0, 1.0], f).expect("bad hyperparams!");
 ///
 /// let (solved, step) = fixed_iters(algo, 1000)
 ///     .on_step(|algo,step| println!("{:?} {:?}", step, algo.x()))
@@ -149,7 +149,7 @@ pub(crate) struct SpsaState {
 /// ```
 ///
 #[derive()]
-pub struct SpsaSolver<'a> {
+pub struct SpsaAlgo<'a> {
     pub(crate) params: SpsaParams,
     pub(crate) state: SpsaState,
     func: FuncKind<'a>,
@@ -169,9 +169,9 @@ impl Default for SpsaParams {
     }
 }
 
-impl std::fmt::Debug for SpsaSolver<'_> {
+impl std::fmt::Debug for SpsaAlgo<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RspsaSolver")
+        f.debug_struct("RspsaAlgo")
             .field("params", &self.params)
             .field("step", &self.state)
             .finish()
@@ -179,21 +179,26 @@ impl std::fmt::Debug for SpsaSolver<'_> {
 }
 
 /// Required by stepwise crate, for the [stepwise::Driver] to function
-impl Algo for SpsaSolver<'_> {
+impl Algo for SpsaAlgo<'_> {
     ///
     type Error = StochyError;
 
     ///
-    fn step(&mut self) -> ControlFlow<Result<(), Self::Error>, Result<(), Self::Error>> {
+    fn step(&mut self) -> (ControlFlow<()>, Result<(), Self::Error>) {
         if let Err(e) = Self::step_df(&self.params, &mut self.state, &mut self.func) {
-            ControlFlow::Break(Err(e))
+            (ControlFlow::Break(()), Err(e))
         } else {
-            ControlFlow::Continue(Ok(()))
+            (ControlFlow::Continue(()), Ok(()))
         }
     }
 }
 
-impl<'a> SpsaSolver<'a> {
+impl<'a> SpsaAlgo<'a> {
+    // Returns a driver that runs the algorithm for a fixed number of iterations.
+    // pub fn fixed_iters(self, fixed_iters: usize) -> stepwise::BasicDriver<Self> {
+    //     stepwise::fixed_iters(self, fixed_iters)
+    // }
+
     /// The current best solution vector.
     pub fn x(&self) -> &[f64] {
         &self.state.x
@@ -219,15 +224,15 @@ impl<'a> SpsaSolver<'a> {
     ///
     /// # Example
     /// ```
-    /// # use stochy::{SpsaSolver, SpsaParams};
+    /// # use stochy::{SpsaAlgo, SpsaParams};
     /// let hyperparameters = SpsaParams::default();
-    /// let initial_vec = [0.23, 0.45, 1.34];
+    /// let initial_vec = vec![0.23, 0.45, 1.34];
     /// let f = | x: &[f64] | 3.0 * x[0]*x[0] - 2.0 * x[1] + x[2].powi(3);
-    /// let algo = SpsaSolver::from_fn(hyperparameters, &initial_vec, f).expect("error!");
+    /// let algo = SpsaAlgo::from_fn(hyperparameters, initial_vec, f).expect("error!");
     /// ```
     pub fn from_fn<F>(
         params: SpsaParams,
-        initial_guess: &[f64],
+        initial_guess: Vec<f64>,
         mut f: F,
     ) -> Result<Self, StochyError>
     where
@@ -245,18 +250,18 @@ impl<'a> SpsaSolver<'a> {
     ///
     /// # Example
     /// ```
-    /// # use stochy::{SpsaSolver, SpsaParams};
+    /// # use stochy::{SpsaAlgo, SpsaParams};
     /// # use std::error::Error;
     /// let hyperparameters = SpsaParams::default();
-    /// let initial_vec = [0.23, 0.45, 1.34];
+    /// let initial_vec = vec![0.23, 0.45, 1.34];
     /// let f = |x: &[f64]| -> Result<f64, Box<dyn Error + Send+ Sync + 'static>> {
     ///     Ok(3.0 * x[0]*x[0] - 2.0 * x[1] + x[2].powi(3))
     /// };
-    /// let algo = SpsaSolver::from_falliable_fn(hyperparameters, &initial_vec, f).expect("error!");
+    /// let algo = SpsaAlgo::from_falliable_fn(hyperparameters, initial_vec, f).expect("error!");
     /// ```
     pub fn from_falliable_fn<F>(
         params: SpsaParams,
-        initial_guess: &[f64],
+        initial_guess: Vec<f64>,
         mut f: F,
     ) -> Result<Self, StochyError>
     where
@@ -268,25 +273,13 @@ impl<'a> SpsaSolver<'a> {
 
     /// Creates a new instance from a given difference function (useful for tuning game play).
     ///
-    /// The function is a relative difference function `df: (&[f64], &[f64]) -> Result<f64>`
-    ///
-    /// where df(x1, x2) ~ f(x2) - f(x1)
-    ///
-    /// this permits use in cases where an abolute value of objective function is unavailable.
-    /// Typically a game playing program would seek to minimise `-df` (and hence maximize `df`)
-    /// where `x₁` and `x₂` represent game playing parameters.
-    ///
-    /// ```math
-    ///    / +1 x₂ win vs x₁ loss
-    /// df =  0 drawn game
-    ///    \ -1 x₂ loss vs x₁ win
-    /// ```
+    /// See [relative difference functions](https://docs.rs/stochy/latest/stochy/index.html#relative_difference)
     ///
     /// # Errors
     /// [`StochyError::InvalidHyperparameter`] if the configuration is invalid.
     pub fn from_difference_fn<F>(
         params: SpsaParams,
-        initial_guess: &[f64],
+        initial_guess: Vec<f64>,
         df: F,
     ) -> Result<Self, StochyError>
     where
@@ -297,13 +290,13 @@ impl<'a> SpsaSolver<'a> {
 
     fn from_function_kind(
         params: SpsaParams,
-        x0: &[f64],
+        x0: Vec<f64>,
         func: FuncKind<'a>,
     ) -> Result<Self, StochyError> {
         if params.c < 0.0 {
             return Err(StochyError::InvalidHyperparameter("c < 0.0".to_string()))?;
         }
-        let x = Vec::<f64>::from(x0);
+        let x = x0;
         let rng = match params.random_seed {
             Some(seed) => StdRng::seed_from_u64(seed),
             None => StdRng::from_os_rng(),
@@ -396,14 +389,14 @@ mod tests {
     fn spsa_trad() -> Result<(), BoxedError> {
         let w = [1.0, 2.0];
         let paraboloid = |x: &[f64]| (x[0] - w[0]).powi(2) + 6. * (x[1] - w[1]).powi(2);
-        let w0 = [5.2, 6.4];
+        let w0 = vec![5.2, 6.4];
         let cfg = SpsaParams {
             a: Some(0.3),
             c: 0.2,
             ..SpsaParams::default()
         };
 
-        let algo = SpsaSolver::from_fn(cfg, &w0, paraboloid).unwrap();
+        let algo = SpsaAlgo::from_fn(cfg, w0, paraboloid).unwrap();
         trace!("{algo:#?}");
         let (solved, step) = fixed_iters(algo, 300)
             .on_step(|s, _v| trace!("{s:?}"))
@@ -424,12 +417,12 @@ mod tests {
                     print!("{:>4}", '-');
                     continue;
                 }
-                let z0 = [w0[0] + 0.01 * f64::from(x0), w0[0] + 0.01 * f64::from(y0)];
+                let z0 = vec![w0[0] + 0.01 * f64::from(x0), w0[0] + 0.01 * f64::from(y0)];
                 let cfg = SpsaParams::default();
 
                 // need to specify types so that lifetimes can be elided
                 let obj_func = |x: &[f64], y: &[f64]| Ok(sigmoid(sphere(y)) - sigmoid(sphere(x)));
-                let algo = SpsaSolver::from_difference_fn(cfg, &z0, obj_func)?;
+                let algo = SpsaAlgo::from_difference_fn(cfg, z0, obj_func)?;
                 let (solved, step) = fixed_iters(algo, 2_000)
                     .converge_when(|v, _s| v.x().dist_max(&w0) < 1e-6)
                     .fail_if(|_v, s| s.iteration() > 1000)

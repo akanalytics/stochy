@@ -15,7 +15,7 @@ use crate::common::FuncKind;
 use crate::BoxedError;
 use crate::StochyError;
 
-/// Hyperparameters for the [RSPSA](RspsaSolver) algorithm
+/// Hyperparameters for the [RSPSA](RspsaAlgo) algorithm
 ///
 /// | Hyperparameter | Default | Explanation |
 /// |:---|:---|:---|
@@ -46,7 +46,7 @@ pub(crate) struct RspsaState {
     iter: usize,
 }
 
-/// RSPSA - the Resiliant SPSA algorithm
+/// RSPSA - the Resilient SPSA algorithm
 ///
 /// ### Overview
 /// The algorithm minimizes a given function using stochastic approximation. It requires only
@@ -94,13 +94,13 @@ pub(crate) struct RspsaState {
 ///
 ///
 /// ```rust
-/// use stochy::{RspsaParams, RspsaSolver};
+/// use stochy::{RspsaParams, RspsaAlgo};
 /// use stepwise::{fixed_iters, Driver, assert_approx_eq};
 ///
 /// let f = |x: &[f64]| (x[0] - 1.5).powi(2) + x.iter().skip(1).map(|x| x * x).sum::<f64>();
 ///
 /// let hyperparams = RspsaParams::default();
-/// let algo = RspsaSolver::from_fn(hyperparams, &[1.0, 1.0], f).expect("bad hyperparams!");
+/// let algo = RspsaAlgo::from_fn(hyperparams, vec![1.0, 1.0], f).expect("bad hyperparams!");
 ///
 /// let (solved, step) = fixed_iters(algo, 1000)
 ///     .on_step(|algo,step| println!("{:?} {:?}", step, algo.x()))
@@ -112,7 +112,7 @@ pub(crate) struct RspsaState {
 /// ```
 ///
 #[derive()]
-pub struct RspsaSolver<'a> {
+pub struct RspsaAlgo<'a> {
     pub(crate) params: RspsaParams,
     pub(crate) state: RspsaState,
     func: FuncKind<'a>,
@@ -140,9 +140,9 @@ impl Default for RspsaParams {
     }
 }
 
-impl std::fmt::Debug for RspsaSolver<'_> {
+impl std::fmt::Debug for RspsaAlgo<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RspsaSolver")
+        f.debug_struct("RspsaAlgo")
             .field("params", &self.params)
             .field("step", &self.state)
             .finish()
@@ -150,21 +150,21 @@ impl std::fmt::Debug for RspsaSolver<'_> {
 }
 
 /// Required by stepwise crate, for the [stepwise::Driver] to function
-impl Algo for RspsaSolver<'_> {
+impl Algo for RspsaAlgo<'_> {
     ///
     type Error = StochyError;
 
     ///
-    fn step(&mut self) -> ControlFlow<Result<(), Self::Error>, Result<(), Self::Error>> {
+    fn step(&mut self) -> (ControlFlow<()>, Result<(), Self::Error>) {
         if let Err(e) = Self::step_df(&self.params, &mut self.state, &mut self.func) {
-            ControlFlow::Break(Err(e))
+            (ControlFlow::Break(()), Err(e))
         } else {
-            ControlFlow::Continue(Ok(()))
+            (ControlFlow::Continue(()), Ok(()))
         }
     }
 }
 
-impl<'a> RspsaSolver<'a> {
+impl<'a> RspsaAlgo<'a> {
     /// Returns the current best solution vector.
     pub fn x(&self) -> &[f64] {
         &self.state.x
@@ -178,16 +178,20 @@ impl<'a> RspsaSolver<'a> {
     ///
     /// # Example
     /// ```
-    /// # use stochy::{RspsaSolver, RspsaParams};
+    /// # use stochy::{RspsaAlgo, RspsaParams};
     ///
     /// let hyperparameters = RspsaParams::default();
-    /// let initial_vec = [0.23, 0.45, 1.34];
+    /// let initial_vec = vec![0.23, 0.45, 1.34];
     /// let f = |x: &[f64]| 3.0 * x[0]*x[0] - 2.0 * x[1] + x[2].powi(3);
     ///
-    /// let algo = RspsaSolver::from_fn(hyperparameters, &initial_vec, f).unwrap();
+    /// let algo = RspsaAlgo::from_fn(hyperparameters, initial_vec, f).unwrap();
     /// ```    
     ///
-    pub fn from_fn<F>(params: RspsaParams, initial_guess: &[f64], f: F) -> Result<Self, StochyError>
+    pub fn from_fn<F>(
+        params: RspsaParams,
+        initial_guess: Vec<f64>,
+        f: F,
+    ) -> Result<Self, StochyError>
     where
         F: FnMut(&[f64]) -> f64 + 'a,
     {
@@ -202,21 +206,21 @@ impl<'a> RspsaSolver<'a> {
     ///
     /// # Example
     /// ```
-    /// # use stochy::{RspsaSolver, RspsaParams};
+    /// # use stochy::{RspsaAlgo, RspsaParams};
     /// # use std::error::Error;
     ///
     ///    let hyperparameters = RspsaParams::default();
-    ///    let initial_vec = [0.23, 0.45, 1.34];
+    ///    let initial_vec = vec![0.23, 0.45, 1.34];
     ///    let f = |x: &[f64]| -> Result<f64, Box<dyn Error + Send + Sync + 'static>> {
     ///       Ok(3.0 * x[0]*x[0] - 2.0 * x[1] + x[2].powi(3))
     ///    };
-    ///    let algo = RspsaSolver::from_falliable_fn(hyperparameters, &initial_vec, f).unwrap();
+    ///    let algo = RspsaAlgo::from_falliable_fn(hyperparameters, initial_vec, f).unwrap();
     /// ```    
     ///
     /// [`StochyError::InvalidHyperparameter`] if the configuration is invalid.
     pub fn from_falliable_fn<F>(
         params: RspsaParams,
-        initial_guess: &[f64],
+        initial_guess: Vec<f64>,
         mut f: F,
     ) -> Result<Self, StochyError>
     where
@@ -231,25 +235,13 @@ impl<'a> RspsaSolver<'a> {
 
     /// Creates a new instance from a given difference function (useful for tuning game play).
     ///
-    /// The function is a relative difference function `df: (&[f64], &[f64]) -> Result<f64>`
-    ///
-    /// where df(x1, x2) ~ f(x2) - f(x1)
-    ///
-    /// this permits use in cases where an abolute value of objective function is unavailable.
-    /// Typically a game playing program would seek to minimise `-df` (and hence maximize `df`)
-    /// where `x₁` and `x₂` represent game playing parameters.
-    ///
-    /// ```math
-    ///    / +1 x₂ win vs x₁ loss
-    /// df =  0 drawn game
-    ///    \ -1 x₂ loss vs x₁ win
-    /// ```
+    /// See [relative difference functions](https://docs.rs/stochy/latest/stochy/index.html#relative_difference)
     ///
     /// # Errors
     /// [`StochyError::InvalidHyperparameter`] if the configuration is invalid.
     pub fn from_difference_fn<F, E>(
         params: RspsaParams,
-        initial_guess: &[f64],
+        initial_guess: Vec<f64>,
         mut df: F,
     ) -> Result<Self, StochyError>
     where
@@ -267,14 +259,14 @@ impl<'a> RspsaSolver<'a> {
 
     fn from_function_kind(
         cfg: RspsaParams,
-        initial_guess: &[f64],
+        initial_guess: Vec<f64>,
         func: FuncKind<'a>,
     ) -> Result<Self, StochyError> {
         if cfg.delta0 > cfg.delta_max() {
             let e = StochyError::InvalidHyperparameter("delta0 > delta_max".to_string());
             return Err(e);
         }
-        let x = Vec::<f64>::from(initial_guess);
+        let x = initial_guess;
         let g = vec![0.0; x.len()];
         let delta = vec![cfg.delta0; x.len()];
 
@@ -408,12 +400,12 @@ mod tests {
 
     #[test]
     fn rspsa_1d() -> Result<(), BoxedError> {
-        let w0 = [1.5];
+        let w0 = vec![1.5];
         let cfg = RspsaParams {
             ..RspsaParams::default()
         };
 
-        let algo = RspsaSolver::from_fn(cfg, &w0, sphere)?;
+        let algo = RspsaAlgo::from_fn(cfg, w0, sphere)?;
         let driver = fixed_iters(algo, 100_000);
         let (solved, step) = driver
             // .on_step(|s, v| println!("{s:?} {} {:?}  {}", s.iteration(), v.x(), (v.x()[0] - 0.0).abs()< 1e-8))
@@ -421,7 +413,7 @@ mod tests {
             .converge_when(|v, _s| (v.x()[0] - 0.0).abs() < 1e-8)
             .solve()?;
 
-        // algo.minimize2((sphere, |s: &RspsaSolver| (s.x()[0] - 3.0).abs() < 1e-8))?;
+        // algo.minimize2((sphere, |s: &RspsaAlgo| (s.x()[0] - 3.0).abs() < 1e-8))?;
 
         let x = solved.x();
         assert!(step.iteration() < 300, "{iters}", iters = step.iteration());
@@ -437,7 +429,7 @@ mod tests {
             ..RspsaParams::default()
         };
 
-        let algo = RspsaSolver::from_fn(cfg, &w0, sphere)?;
+        let algo = RspsaAlgo::from_fn(cfg, w0, sphere)?;
         let driver = fixed_iters(algo, 1_000_000);
         let (solved, step) = driver
             .converge_when(|v, _s| sphere(v.x()).abs() < 1e-6)
@@ -464,14 +456,14 @@ mod tests {
                     print!("{:>4}", '-');
                     continue;
                 }
-                let z0 = [
+                let z0 = vec![
                     w0[0] + 0.01 * f64::from(initial_guess),
                     w0[0] + 0.01 * f64::from(y0),
                 ];
                 let cfg = RspsaParams {
                     ..RspsaParams::default()
                 };
-                let algo = RspsaSolver::from_fn(cfg, &z0, |x| sigmoid(sphere(x)))?;
+                let algo = RspsaAlgo::from_fn(cfg, z0, |x| sigmoid(sphere(x)))?;
                 let driver = fixed_iters(algo, 1_000_000);
                 let (solved, step) = driver
                     .converge_when(|v, _s| v.x().dist_max(&w0) < 1e-6)

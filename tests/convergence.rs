@@ -1,6 +1,6 @@
 use std::error::Error;
 use stepwise::{fixed_iters, Driver};
-use stochy::{RspsaParams, RspsaSolver, SpsaParams, SpsaSolver};
+use stochy::{RspsaAlgo, RspsaParams, SpsaAlgo, SpsaParams};
 
 // {\displaystyle f({\boldsymbol {x}})=\sum _{i=1}^{n-1}\left[100\left(x_{i+1}-x_{i}^{2}\right)^{2}+\left(1-x_{i}\right)^{2}\right]}
 
@@ -32,7 +32,7 @@ fn convergence() -> Result<(), Box<dyn Error>> {
             ..SpsaParams::default()
         };
 
-        let algo = SpsaSolver::from_fn(cfg, &x0, &mut f)?;
+        let algo = SpsaAlgo::from_fn(cfg, x0.to_vec(), &mut f)?;
         let driver = fixed_iters(algo, 500);
         let (solved, _step) = driver.solve().unwrap();
         let _x = solved.x();
@@ -44,19 +44,19 @@ fn convergence() -> Result<(), Box<dyn Error>> {
         };
         drop(solved);
 
-        let algo = RspsaSolver::from_fn(cfg.clone(), &x0, &mut f)?;
+        let algo = RspsaAlgo::from_fn(cfg.clone(), x0.to_vec(), &mut f)?;
         let (solved, _step) = fixed_iters(algo, 300).solve()?;
 
         let _x = solved.x();
         drop(solved);
 
-        let algo = RspsaSolver::from_fn(cfg, &x0, move |x| f(x))?;
+        let algo = RspsaAlgo::from_fn(cfg, x0.to_vec(), move |x| f(x))?;
         let mut driver = fixed_iters(algo, 300);
         while let Some((v, _s)) = driver.iter_step().unwrap() {
-            if let Some(rspsa) = (v as &mut dyn std::any::Any).downcast_mut::<RspsaSolver>() {
-                // `rspsa` is now a &mut RspsaSolver
-                println!("This is an RspsaSolver! {rspsa:?}");
-                // You can now use `rspsa` as an `RspsaSolver`
+            if let Some(rspsa) = (v as &mut dyn std::any::Any).downcast_mut::<RspsaAlgo>() {
+                // `rspsa` is now a &mut RspsaAlgo
+                println!("This is an RspsaAlgo! {rspsa:?}");
+                // You can now use `rspsa` as an `RspsaAlgo`
             }
         }
         let (solved, _step) = driver.solve()?;

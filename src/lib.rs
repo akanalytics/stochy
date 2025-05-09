@@ -1,4 +1,5 @@
 #![doc=include_str!("../README.md")]
+#![doc=include_str!("../README_MORE.md")]
 #![deny(
     future_incompatible,
     missing_docs,
@@ -33,8 +34,8 @@ pub use rspsa_argmin::RspsaSolverArgmin;
 #[cfg_attr(docsrs, doc(cfg(feature = "argmin")))]
 pub use spsa_argmin::SpsaSolverArgmin;
 
-pub use rspsa::{RspsaParams, RspsaSolver};
-pub use spsa::{SpsaParams, SpsaSolver};
+pub use rspsa::{RspsaAlgo, RspsaParams};
+pub use spsa::{SpsaAlgo, SpsaParams};
 
 use std::{error::Error, fmt::Display, sync::Arc};
 
@@ -72,3 +73,9 @@ impl Error for StochyError {
 #[allow(dead_code)]
 struct AssertSendSync<T: Send + Sync>(std::marker::PhantomData<T>);
 const _: AssertSendSync<StochyError> = AssertSendSync(std::marker::PhantomData);
+
+// generate a skipped tests count if feature flag not used
+#[cfg(not(feature = "argmin"))]
+#[test]
+#[ignore]
+fn armin_tests_not_run() {}

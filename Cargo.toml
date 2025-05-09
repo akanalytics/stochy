@@ -1,21 +1,21 @@
 [package]
 name = "stochy"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 authors = ["andy watkins <andy@webcalculator.com>"]
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
-description = "a numeric library"
+description = "A numeric library of stochastic approximation algorithms"
 repository = "https://github.com/akanalytics/stochy"
 homepage = "https://github.com/akanalytics/stochy"
 readme = "README.md"
-keywords = ["math", "solver", "optimization", "stochastic", "iterative"]
+keywords = ["solver", "optimization", "stochastic", "SPSA", "RSPSA"]
 categories = ["mathematics", "algorithms"]
 publish = true
 
 
 [dependencies]
-stepwise = { path = "../stepwise", version = "0.0.1" }
+stepwise = { path = "../stepwise", version = "0.0.2" }
 rand = "0.9.0"
 argmin = { version = "0.10.0", optional= true}
 
@@ -34,7 +34,6 @@ default = []
 [package.metadata.docs.rs]
 features = ["argmin"]
 rustdoc-args = ["--cfg", "docsrs"]
-
 
 
 [lints]

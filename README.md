@@ -1,65 +1,66 @@
+
+[![Latest version](https://img.shields.io/crates/v/stochy.svg)](https://crates.io/crates/stochy)
+[![Documentation](https://docs.rs/stochy/badge.svg)](https://docs.rs/stochy)
+[![License](https://img.shields.io/crates/l/stochy.svg)](https://choosealicense.com/licenses/)
+[![msrv](https://img.shields.io/crates/msrv/stochy)](https://www.rust-lang.org)
+
 # Overview
 
-Stochy is a collection of stochastic approximation algorithms - methods for optimizing systems with multiple unknown parameters.
-The algos can be used with [stepwise](<https://crates.io/crates/stochy>) (built-in, the default) or with [argmin](<https://crates.io/crates/argmin>) (using feature-flag `argmin`).
+`stochy` is a collection of stochastic approximation algorithms:
 
-Neither algo requires a gradient function, only the objective function to be minimised. Alternatively a proxy to relative differences of objective function evaluations can be specified. See [Relative difference functions](#relative_difference)
+- [`RSPSA`](https://docs.rs/stochy/latest/stochy/struct.RspsaAlgo.html) (Resilient Simultaneous Perturbation Stochastic Approximation) 
+- [`SPSA`](https://docs.rs/stochy/latest/stochy/struct.SpsaAlgo.html) (Simultaneous Perturbation Stochastic Approximation) 
 
-## RSPSA algorithm
-Resiliant Simultaneous Perturbation Stochastic Approximation.
-[`RspsaSolver`]
+You can use `stochy` to:
 
-## SPSA algorithm
-Simultaneous Perturbation Stochastic Approximation.
-[`SpsaSolver`]
+- Minimize functions with multiple parameters, without needing a gradient function
+- Optimize parameters in game-playing programs using [relative difference functions](#relative_difference)
 
+`stochy` is compatible with both the [stepwise](https://crates.io/crates/stepwise) solver API and 
+the [argmin](https://crates.io/crates/argmin) solver API (enable via the `argmin` feature flag).
 
+- [Documentation](https://docs.rs/stochy)
+- [Changelog](https://github.com/akanalytics/stochy/blob/main/CHANGELOG.md)
+- [Releases](https://github.com/akanalytics/stochy/releases)
 
-# Crate features
-By default no features are enabled.
+# Usage
 
-Features:
-- `argmin`: enable integration with [argmin](<https://crates.io/crates/argmin>).
+Example `Cargo.toml`:
 
-Example `Cargo.toml`
 ```toml
 [dependencies]
-stochy = { version = "0.0.1", features = ["argmin"] }
+stochy = "0.0.2" 
+
+# if using argmin, replace above with...
+# stochy = { version = "0.0.2", features = ["argmin"] } 
 ```
 
-
-# Example
-The [`stepwise::Driver`] has functional style iteration control methods,
-along with a `solve` call which returns the algo (in a solved state) 
-along with final iteration step.
-The `on_step()` logging and progress bar are optional, and can be omitted.
+## Example
 
 
 ```rust
-# use std::time::Duration;
-use stochy::{SpsaParams, SpsaSolver};
-use stepwise::{fixed_iters, Driver, assert_approx_eq};
+use stepwise::{Driver as _, fixed_iters, assert_approx_eq};
+use stochy::{SpsaAlgo, SpsaParams};
 
 let f = |x: &[f64]| (x[0] - 1.5).powi(2) + x[1] * x[1];
 
 let hyperparams = SpsaParams::default();
-let algo = SpsaSolver::from_fn(hyperparams, &[1.0, 1.0], f).expect("hyperparams!");
+let spsa = SpsaAlgo::from_fn(hyperparams, vec![1.0, 1.0], f).expect("bad hyperparams!");
 
-let driver = fixed_iters(algo, 1000)
-    .on_step(|algo,step| println!("{:?} {:?}", step, algo.x()))
-    .show_progress_bar_after(Duration::from_millis(200));
+let (solved, final_step) = fixed_iters(spsa, 20_000)
+    .on_step(|algo, step| println!("{:>4} {:.8?}", step.iteration(), algo.x()))
+    .solve()
+    .expect("solving failed!");
 
-let (solved, step) = driver.solve().expect("solving failed!");
-
-assert_approx_eq!(solved.x(), &[1.5, 0.0], 1e-2);
+assert_approx_eq!(solved.x(), &[1.5, 0.0]);
+println!("solved in {} iters", final_step.iteration());
 ```
 
 
-# Example (Argmin)
-In the below, `use` statements have been replaced by full qualification of paths, to make clear what
-structs or functions come from which crates.
+## Example (argmin)
 
 ```rust
+use stepwise::assert_approx_eq;
 struct MySimpleCost;
 
 # #[cfg(feature = "argmin")]
@@ -79,12 +80,12 @@ let exec = argmin::core::Executor::new(MySimpleCost, algo);
 
 let initial_param = vec![1.0, 1.0];
 let result = exec
-    .configure(|step| step.param(initial_param).max_iters(1000))
+    .configure(|step| step.param(initial_param).max_iters(20_000))
     .run()
     .unwrap();
 
 let best_param = result.state.best_param.unwrap();
-stepwise::assert_approx_eq!(best_param.as_slice(), &[1.5, 0.0], 1e-2);
+assert_approx_eq!(best_param.as_slice(), &[1.5, 0.0]);
 ```
 
 
@@ -95,30 +96,11 @@ stepwise::assert_approx_eq!(best_param.as_slice(), &[1.5, 0.0], 1e-2);
 | :--- | :--- | :--- |
 | <a href="https://postimg.cc/nsHPN1tg">
    <img src="https://i.postimg.cc/nsHPN1tg/plot3d-Sphere-GD.png" width="300" /></a> | <a href="https://postimg.cc/5Yyk2Nym"><img src="https://i.postimg.cc/5Yyk2Nym/plot3d-Sphere-RSPSA.png" width="300" /></a> | <a href="https://postimg.cc/7CmW4TH6"><img src="https://i.postimg.cc/7CmW4TH6/plot3d-Sphere-SPSA.png" width="300" /></a> |
-| Gradient function required | No gradient function required | No gradient function required |
-| Gradient function required | Accepts relative difference function | Accepts relative difference function |
+| Requires gradient function | No gradient function required | No gradient function required |
+| Requires gradient function | Accepts relative difference function | Accepts relative difference function |
 | One gradient eval per iteration | Two function evals per iteration | Two function evals per iteration |
 | Single learning-rate hyperparameter | Very sensitive to hyperparameters | Less sensitive to hyperparameters than SPSA |
 | Continuous convergence progression  | Convergence saturation | Continuous convergence progression | 
-
-
-
-# <a name="relative_difference">Relative Differences</a>
-
-Rather than specifying an objective function to be minimised (cost function), a relative difference function can be specified.
-
-```text
-df(x1, x2) ~ f(x2) - f(x1)
-```
-which permits use in cases where an abolute value of objective function is unavailable. Typically a game playing program would seek to minimise `-df` (and hence maximize `df`) where `x₁` and `x₂` represent game playing parameters, and the difference function df represents the outcome of a single game or a series of games.
-
-```text
-           / +1   x₂ win vs x₁ loss
-df(x₁, x₂) =  0   drawn game
-           \ -1   x₂ loss vs x₁ win
-```
-
-
 
 
 
