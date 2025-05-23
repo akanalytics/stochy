@@ -1,29 +1,28 @@
 //! RSPSA algorithm
 //!
 //!
-
+use crate::common::rademacher;
+use crate::common::FuncKind;
+use crate::StochyError;
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
 use std::error::Error;
 use std::iter::zip;
 use std::ops::ControlFlow;
 use stepwise::Algo;
+use stepwise::BoxedError;
 use stepwise::VectorExt as _;
-
-use crate::common::rademacher;
-use crate::common::FuncKind;
-use crate::BoxedError;
-use crate::StochyError;
 
 /// Hyperparameters for the [RSPSA](RspsaAlgo) algorithm
 ///
 /// | Hyperparameter | Default | Explanation |
 /// |:---|:---|:---|
 /// | random seed | Some(0) | Some(seed) for reproducible results.<br>Use None for an (arbitrary) entropy based seed |
-/// | epa_p | 1.1 | Step size growth for same sign df |
-/// | epa_m | 0.85 | Step size growth for sign reversals |
+/// | epa_p | 1.1 | Step size growth for same sign df (η₊) |
+/// | epa_m | 0.85 | Step size growth for sign reversals (η₋) |
 /// | delta0 | 0.01 | Initial step size |
-/// | delta_min | 1e-6 | Min delta |
+/// | delta_min | 1e-6 | Min step-size |
+/// | delta_max | 100 x delta_min | Max step-size |
 ///
 #[allow(missing_docs)]
 #[derive(Clone, Debug)]
@@ -64,27 +63,42 @@ pub(crate) struct RspsaState {
 ///
 /// (sign differs from paper as we are *minimising* the objective function not maximising)
 ///
-/// θ\[t+1,i\] = θ\[t,i\] + sign(g\[ti\]) * δ\[ti\]  for  t = 1, 2,... and  i = 1, 2,...,d
 ///
-/// where
+/// Update rule:
 ///
-/// δ\[ti\] ≥ 0 is the step size for the i-th component and
+/// ```text
+/// θ[t+1, i] = θ[t, i] + sign(g[t, i]) * δ[t, i]   for t = 1, 2, ... and i = 1, 2, ..., d
+/// ```
 ///
-/// g\[t·\] is a gradient-like quantity:
+/// where:
 ///
-/// g\[ti\] = I(g\[t−1,i\] * f'\[i\](θ\[t\]) ≥ 0) * f\[i\](θ\[t\])
-/// gti equals the ith partial derivative of f at θ except when a sign reversal is
-/// observed between the current and the previous partial derivative, in which case
-/// gti is set to zero
+/// - `δ[t, i] ≥ 0` is the step size for the *i*-th component
+/// - `g[t, ·]` is a gradient-like quantity:
 ///
+/// ```text
+/// g[t, i] = I(g[t−1, i] * f′[i](θ[t]) ≥ 0) * f[i](θ[t])
+/// ```
 ///
-/// p\[ti\] = g\[t−1,i\] * f'\[i\](θ\[t\])
+/// That is:
+/// - `g[t, i]` equals the *i*-th partial derivative estimate of `f` at `θ[t]`,  
+/// - unless the sign of the partial derivative estimate has reversed since `t−1`, in which case `g[t, i] = 0`
 ///
-/// η\[ti\] = I(p\[ti\] > 0) * η+
-///       + I(p\[ti\] < 0) * η−
-///       + I(p\[ti\] = 0) * 1.
+/// Auxiliary terms:
 ///
-/// δ\[ti\] = P\[δ−,δ+\] * η\[ti\] *  δ\[t−1,i\]
+/// ```text
+/// p[t, i]   = g[t−1, i] * f′[i](θ[t])
+///
+/// η[t, i]   = I(p[t, i] > 0) * η₊
+///           + I(p[t, i] < 0) * η₋
+///           + I(p[t, i] = 0) * 1
+///
+/// δ[t, i]   = P[δ₋, δ₊] * η[t, i] * δ[t−1, i]
+/// ```
+///
+/// - `η₊` and `η₋` are acceleration/slowdown factors [`RspsaParams::eta_p`] and [`RspsaParams::eta_m`]
+/// - `P[δ₋, δ₊]` denotes projection onto the bounds [`RspsaParams::delta_min`] and [`RspsaParams::delta_max`](struct@RspsaParams#structfield.delta_max)
+///
+/// See [`RspsaParams`] for details on hyperparameters.
 ///
 /// ### Example
 /// The [`stepwise::Driver`] has functional style iteration control methods,
@@ -151,7 +165,6 @@ impl std::fmt::Debug for RspsaAlgo<'_> {
 
 /// Required by stepwise crate, for the [stepwise::Driver] to function
 impl Algo for RspsaAlgo<'_> {
-    ///
     type Error = StochyError;
 
     ///
@@ -394,7 +407,7 @@ mod tests {
     use stepwise::{
         assert_approx_eq, fixed_iters,
         problems::{sigmoid, sphere},
-        BoxedError, Driver, VectorExt,
+        BoxedError, VectorExt,
     };
     use test_log::test;
 

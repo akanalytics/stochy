@@ -1,5 +1,5 @@
 use std::error::Error;
-use stepwise::{fixed_iters, Driver};
+use stepwise::fixed_iters;
 use stochy::{RspsaAlgo, RspsaParams, SpsaAlgo, SpsaParams};
 
 // {\displaystyle f({\boldsymbol {x}})=\sum _{i=1}^{n-1}\left[100\left(x_{i+1}-x_{i}^{2}\right)^{2}+\left(1-x_{i}\right)^{2}\right]}

@@ -1,54 +1,48 @@
 use rand::rngs::StdRng;
 use rand::SeedableRng as _;
 use std::ops::ControlFlow;
-use stepwise::{Algo, VectorExt as _};
+use stepwise::{Algo, BoxedError, VectorExt as _};
 
 use crate::{
     common::{rademacher, FuncKind},
-    BoxedError, StochyError,
+    StochyError,
 };
 
-/// Hyperparameters for the [SPSA](SpsaAlgo) algorithm
+/// Hyperparameters for the [`SpsaAlgo`] algorithm.
 ///
-/// | Hyperparameter | Default | Explanation |
-/// | :--- | :--- | :--- |
-/// | random seed  |   Some(0)                         | `Some(seed)` for reproducible results.<br> Use `None` for an (arbitrary) entropy based seed |
-/// | alpha        |   0.602                           | learning rate decay |
-/// | gamma        |   0.101                           | step size decay |
-/// | A (big_a)    |   0.01 x 1_000                    | recommended set to 0.01 x estimate_iterations (up to 0.1 x estimate_iterations) |
-/// | a            |   0.1 (A + 1)^α / \|g0\|          | is the initial lr.<br>\|g0\| is the magnitutde of initial gradient estimate |
-/// | c            |   0.01                            | initial step size (use larger for noisy objective functions) |
+/// | Hyperparameter | Default             | Explanation |
+/// |----------------|---------------------|-------------|
+/// | `random_seed`  | `Some(0)`           | Use `Some(seed)` for reproducible results. <br> Use `None` for entropy-based seeding. |
+/// | `alpha`        | `0.602`             | Learning rate decay exponent. |
+/// | `gamma`        | `0.101`             | Step size decay exponent. |
+/// | `big_a`        | `0.01 × 1_000`      | Set to ~1–10% of the estimated number of iterations. |
+/// | `a`            | `0.1 × (A + 1)^α / \|g₀\|` | Initial learning rate. <br> `\|g₀\|` is the magnitude of the initial gradient estimate. |
+/// | `c`            | `0.01`              | Initial step size. <br> Use a larger value for noisy objective functions. |
 ///
-/// Spall's comments on hyperparameters:
+/// ### Notes on Hyperparameter Selection
 ///
-/// * **Alpha and Gamma:**
-///   Practically effective (and theoretically valid) values for alpha = 0.602 and gamma = 0.101,
-///   respectively (the asymptotically optimal values of 1.0 and 1/6 may also be used);
+/// **Alpha and Gamma**  
+/// Practically effective (and theoretically valid) values are `alpha = 0.602` and `gamma = 0.101`.  
+/// Asymptotically optimal values are `alpha = 1.0`, `gamma = 1/6`, though these are rarely used in practice.
 ///
-/// * **Parameter c:**
-///   One typically finds that in a high-noise setting (i.e., poor quality measurements of gradient)
-///   it is necessary to pick a smaller a and larger c than in a low-noise setting.
+/// **Parameter `c`**  
+/// In high-noise settings (i.e., poor quality measurements of gradient), use a **larger `c`** and a **smaller `a`**.  
+/// A good rule of thumb is to set `c` approximately equal to the standard deviation of the noise in `f(x)`
+/// (estimated by evaluating `f(x)` multiple times at the same `x`).  
+/// If `f(x)` is noise-free, a small positive value for `c` suffices.
 ///
-///   As a rule-of-thumb (with the Bernoulli distribution for the elements of aₖ as suggested in Step 1),
-///   it is effective to set c at a level approximately equal to the standard deviation of the measurement
-///   noise in y(θ) in order to keep the p elements of ĝₖ(θₖ) from getting excessively large in magnitude
-///   (the standard deviation can be estimated by collecting several y(θ) values at the initial guess θ₀;
-///   a precise estimate is not required in practice).
+/// **Parameters `big_a` and `a`**  
+/// Choose `big_a` such that it's **much smaller** than the maximum number of iterations (commonly 10% or less).  
+/// Choose `a` such that:
 ///
-///   In the case where one had perfect measurements of L(θ), then c should be chosen as some small positive number.
+/// ```text
+/// a / (A + 1)^alpha × |g₀| ≈ smallest_desired_change_in_x
+/// ```
 ///
-/// * **Parameters `big_a` and a:**
-///   As guideline we have found useful is to choose A such that it is much less than the maximum number
-///   of iterations allowed or expected, e.g., we frequently take it to be 10% (or less) of the maximum number
-///   of expected/allowed iterations
-///
-///   and choose a such that ```a/(A + 1)^alpha``` times the magnitude of elements in ghat(θ₀) is approximately equal
-///   to the smallest of the desired change magnitudes among the elements of θ in the early iterations.
-///     
-///   a = `smallest_desired_change_in_x` * (A+1)^alpha / `magnitude_of_initial_gradient`
-///     
+/// where `|g₀|` is the magnitude of the initial gradient estimate,  
+/// and `smallest_desired_change_in_x` is the minimal meaningful step size in the parameter vector `x`.
 #[derive(Clone, Debug)]
-#[allow(missing_docs)] // TODO
+#[allow(missing_docs)] // documentation of pub fields at struct level instead
 pub struct SpsaParams {
     pub random_seed: Option<u64>,
     pub alpha: f64,
@@ -68,67 +62,59 @@ pub(crate) struct SpsaState {
     a0: f64,
 }
 
-/// The traditional SPSA algorithm
+/// The traditional SPSA algorithm.
 ///
 /// ### Overview
-/// The algorithm minimizes a given function using stochastic approximation. It requires only
-/// the objective (cost) function, not a gradient.
+/// This algorithm minimizes a given function using stochastic approximation.  
+/// It requires only the objective (cost) function — no gradient is needed.
 ///
-/// ### Paper
+/// ### Reference
 ///
-/// "An Overview of the Simultaneous Perturbation Method for Efficient Optimization"
-///
-/// *James CSpall (1998)*
-///
+/// *James C. Spall (1998)*  
+/// “An Overview of the Simultaneous Perturbation Method for Efficient Optimization”  
 /// <https://www.jhuapl.edu/SPSA/PDF-SPSA/Spall_An_Overview.PDF>
 ///
 /// ### Algorithm
+/// See [`SpsaParams`] for hyperparameter details.
 ///
-/// (see [`SpsaParams`] for details on the hyperparameters)
-///
-/// ```Matlab
-/// N  <--- estimated number of iterations
-/// g0 <--- estimated gradient
-/// α  <--- 0.602
-/// γ  <--- 0.101
-/// A  <--- 0.01N
-/// a0 <--- 0.1(A + 1)^α/∥g0∥
-/// c  <--- 0.01
+/// ```matlab
+/// N  <--- estimated number of iterations  
+/// g0 <--- estimated gradient  
+/// α  <--- 0.602  
+/// γ  <--- 0.101  
+/// A  <--- 0.01 * N  
+/// a0 <--- 0.1 * (A + 1)^α / ∥g0∥  
+/// c  <--- 0.01  
 /// x  <--- initial guess
 ///
-/// for k = 1,2,...,N do
-///     ak <--- a0/(k + A)^α
-///     ck <--- c/k^γ
-///     δk <--- vector of rademacher distribution
-///      g <--- [f(x + ck.δk) - f(x - ck.δk)] / 2
-///      x <--- x - ak.g
+/// for k = 1, 2, ..., N do  
+///     ak ← a0 / (k + A)^α  
+///     ck ← c / k^γ  
+///     δk ← vector from the Rademacher distribution  
+///      g ← [f(x + ck·δk) − f(x − ck·δk)] / (2·ck·δk)  
+///      x ← x − ak · g  
 /// end for
 /// ```
 ///
-/// - requires only the objective function, not the gradient function
-/// - also accept a relative difference function, ideal for game-play, without an absolute objective function
-/// - requires two function evaluations per iteration
-/// - offers good convergence
-/// - is *very* sensitive to hyper-parameters
+/// - Requires only the objective function (not its gradient)  
+/// - Also accepts a relative difference function, ideal for game-playing tasks without an absolute objective  
+/// - Requires two function evaluations per iteration  
+/// - Offers strong convergence properties  
+/// - Is *very* sensitive to hyperparameters
 ///
-///
-///  theta
-///    If maximum and minimum values on the values of theta
-///    can be specified, say thetamax and thetamin, then the
-///    following two lines can be added below the theta update
-///    line to impose the constraints
+/// ### Constrained theta (optional)
+/// If minimum and maximum values for the parameter vector `theta` can be specified (say `thetamin` and `thetamax`),  
+/// you may apply clipping after the update step:
 ///
 /// ```matlab
-///    theta = min(theta, thetamax);
-///    theta = max(theta, thetamin);
+/// theta = min(theta, thetamax);
+/// theta = max(theta, thetamin);
 /// ```
 ///
-/// /// ### Example
-/// The [`stepwise::Driver`] has functional style iteration control methods,
-/// along with a `solve` which returns a pair-tuple of the algo (in a solved state)
-/// and with final iteration step.
-/// The on_step() logging is optional and can be omitted.
-///
+/// ### Example
+/// The [`stepwise::Driver`] provides a functional-style iteration controller,  
+/// and a `.solve()` method that returns a `(solved_algo, final_step)` tuple.  
+/// The `on_step()` callback enables optional iteration-time logging.
 ///
 /// ```rust
 /// use stochy::{SpsaParams, SpsaAlgo};
@@ -140,7 +126,7 @@ pub(crate) struct SpsaState {
 /// let algo = SpsaAlgo::from_fn(hyperparams, vec![1.0, 1.0], f).expect("bad hyperparams!");
 ///
 /// let (solved, step) = fixed_iters(algo, 1000)
-///     .on_step(|algo,step| println!("{:?} {:?}", step, algo.x()))
+///     .on_step(|algo, step| println!("{:?} {:?}", step, algo.x()))
 ///     .solve()
 ///     .expect("failed to solve");
 ///
@@ -180,7 +166,6 @@ impl std::fmt::Debug for SpsaAlgo<'_> {
 
 /// Required by stepwise crate, for the [stepwise::Driver] to function
 impl Algo for SpsaAlgo<'_> {
-    ///
     type Error = StochyError;
 
     ///
@@ -381,7 +366,6 @@ mod tests {
     use stepwise::{
         assert_approx_eq, fixed_iters,
         problems::{sigmoid, sphere},
-        Driver,
     };
     use test_log::test;
 

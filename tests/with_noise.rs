@@ -1,7 +1,7 @@
 use rand::{Rng, SeedableRng};
 use rand_pcg::Pcg64;
 use std::error::Error;
-use stepwise::{assert_approx_eq, fixed_iters, problems::sphere, Driver};
+use stepwise::{assert_approx_eq, fixed_iters, problems::sphere};
 use stochy::{RspsaAlgo, RspsaParams, SpsaAlgo, SpsaParams};
 
 #[test]

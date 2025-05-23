@@ -501,11 +501,11 @@ dependencies = [
 
 [[package]]
 name = "stepwise"
-version = "0.0.2"
+version = "0.0.3"
 
 [[package]]
 name = "stochy"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "anyhow",
  "argmin",
